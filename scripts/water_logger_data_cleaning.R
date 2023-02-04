@@ -123,8 +123,15 @@ day.precip <- slim %>%
 ## Join this to our combined data
 clean <- combined %>% 
   left_join(., day.precip, by = "date") %>% 
-  mutate(water.depth = cor.logger.depth*100) %>% 
-  select(1:6, 16, 8:15, 17)
+  mutate(water.depth = cor.logger.depth*100,
+         doy = yday(date),
+         hr = hour(timestamp),
+         hr = as.character(hr),
+         hr = ifelse(nchar(hr) < 2, paste0("0", hr), hr),
+         doy_h = paste0(doy, ".", hr),
+         lag.precip = lag(precip.cm),
+         lag.precip = ifelse(is.na(lag.precip), 0, lag.precip)) %>% 
+  select(1:6, 21, 16, 17, 8:15, 18:20)
 
 
 ## Write out the clean data
