@@ -136,7 +136,15 @@ plot_hydro_site_year <- function(df, yvar, site, years = 2013:as.numeric(format(
 gmwell <- tibble(read.csv("outputs/great_meadow_well_data_20230121.csv")) %>% 
   rename(Date = date, Year = year, precip_cm = precip.cm) %>% 
   select(timestamp, Date, doy, Year, precip_cm, water.depth, lag.precip, hr, doy_h, plot.num) %>% 
-  mutate(timestamp = as_datetime(timestamp))
+  mutate(timestamp = as_datetime(timestamp),
+         water.depth = ifelse(Year == 2016 & doy_h == 159.12 & plot.num == 3 & 
+                                water.depth < -120, NA, water.depth),
+         water.depth = ifelse(Year == 2017 & doy_h == 215.02 & plot.num == 6 & 
+                                water.depth < -115, NA, water.depth),
+         water.depth = ifelse(Year == 2021 & plot.num == 3 & doy == 224 &
+                                water.depth > 400, NA, water.depth),
+         water.depth = ifelse(Year == 2021 & plot.num == 3 & doy == 225 &
+                                water.depth > 400, NA, water.depth))
 
 
 ## Create function to loop that calculates water level stats for each of the six plots
@@ -146,17 +154,36 @@ wl_stats_loop <- function(plot.number) {
     filter(plot.num == plot.number) %>% 
     select(-plot.num) %>% 
     calc_WL_stats(., from = 2016, to = 2022) %>% 
-    mutate(site = paste0("plot.", plot.number))
+    mutate(site = paste0("great.meadow.", plot.number))
   
   return(output)
 }
 
 
 ## Calculate the water level stats; 2015 does not have enough data so skipping here
-wl_stats <- map_dfr(1:6, ~wl_stats_loop(.))
+gm_wl_stats <- map_dfr(1:6, ~wl_stats_loop(.))
+
+
+## Gilmore Meadow
+gilm <- tibble(read.csv("data/gilmore_well_prec_data_2013-2022.csv")) %>% 
+  rename(gilmore.meadow = GILM_WL)
+
+gil_wl_stats <- calc_WL_stats(gilm, from = 2016, to = 2022)
+
+
+## Merge the two meadow wl stats
+wl_stats <- bind_rows(gm_wl_stats, gil_wl_stats) %>% 
+  select(site, Year, everything())
+
+## Pivot into a table for exploration
+wl_table <- wl_stats %>% 
+  pivot_longer(cols = WL_mean:prop_under_neg30cm) %>% 
+  pivot_wider(names_from = site, values_from = value) %>% 
+  select(year = Year, stat = name, gilmore.meadow, everything())
+
 
 ## Write out the water level stats
-write_csv(wl_stats, "outputs/great_meadow_wl_stats.csv")
+write_csv(wl_table, "outputs/gm_gl_wl_stats.csv")
 
 
 
@@ -164,11 +191,21 @@ write_csv(wl_stats, "outputs/great_meadow_wl_stats.csv")
 
 ### Create hydrology graphs
 ## Format data
+## Great Meadow
 gm <- gmwell %>%
   mutate(water.depth = ifelse(Year == 2016 & doy_h == 159.12 & plot.num == 3 & 
-                              water.depth < -120, NA, water.depth)) %>% 
+                              water.depth < -120, NA, water.depth),
+         water.depth = ifelse(Year == 2017 & doy_h == 215.02 & plot.num == 6 & 
+                                water.depth < -115, NA, water.depth),
+         water.depth = ifelse(Year == 2021 & plot.num == 3 & doy == 224 &
+                                water.depth > 400, NA, water.depth),
+         water.depth = ifelse(Year == 2021 & plot.num == 3 & doy == 225 &
+                                water.depth > 400, NA, water.depth)) %>% 
   mutate(site = paste("Great Meadow", plot.num))
 
+## Gilmore Meadow
+gl <- gilm %>% 
+  mutate(site = paste("Gilmore Meadow"))
 
 ## Create a list of the sites to plot
 site.list <- gm %>% 
@@ -183,6 +220,24 @@ site.list <- gm %>%
 
 
 ## Write hydrograph creating function
+# hydrograph <- function (siteyear) {
+#   
+#   sitename <- str_extract(siteyear, "([^_]*)")
+#   
+#   year <- str_extract(siteyear, "[^_]*$")
+#   
+#   dat <- gm %>% filter(site == sitename)
+# 
+#   plot_hydro_site_year(df = dat, yvar = "water.depth", site = sitename, years = year)
+#   
+#   
+#   
+#   ggsave(paste0("outputs/hydrographs/", str_replace_all(sitename, "\\s", "_"),
+#                 "_", year, ".png"), width = 8, height = 6)
+#     
+# }
+
+
 hydrograph <- function (siteyear) {
   
   sitename <- str_extract(siteyear, "([^_]*)")
@@ -190,13 +245,57 @@ hydrograph <- function (siteyear) {
   year <- str_extract(siteyear, "[^_]*$")
   
   dat <- gm %>% filter(site == sitename)
-
-  plot_hydro_site_year(df = dat, yvar = "water.depth", site = sitename, years = year)
   
+  dat2 <- dat %>% filter(Year == year) %>%
+    filter(doy > 134 & doy < 275) %>%
+    select(doy_h, water.depth, Year, lag.precip) %>% droplevels()
+  
+  colnames(dat2) <- c('doy_h', 'WL', 'Year', 'lag.precip')
+  
+  gil <- gl %>% filter(Year == year) %>%
+    filter(doy > 134 & doy < 275) %>%
+    select(doy_h, water.depth, Year, lag.precip) %>% droplevels()
+  
+  colnames(gil) <- c('doy_h', 'WL', 'Year', 'lag.precip')
+  
+  minWL1 <- min(dat2$WL, na.rm = TRUE)
+  minWL2 <- min(gil$WL, na.rm = TRUE)
+  
+  minWL <- min(minWL1, minWL2)
+
+  ggplot(dat2, aes(x = doy_h, y = WL, group = Year)) +
+    geom_line(aes(color = 'black')) +
+    geom_line(aes(x = doy_h, y = lag.precip*5 + minWL, group = Year), color ='blue', size = 0.8) +
+    geom_line(data = gil, aes(color = 'darkgray')) +
+    facet_wrap(~Year, nrow = length(unique(dat$Year))) +
+    geom_hline(yintercept = 0, color = 'brown') +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5),
+          legend.position = "bottom",
+          legend.title = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          axis.text.y.right = element_text(color = 'blue'),
+          axis.title.y.right = element_text(color = 'blue'),
+          strip.text = element_text(size = 11)) +
+    labs(title = sitename, y = 'Water Level (cm)\n', x = 'Date') +
+    scale_x_continuous(breaks = c(121, 152, 182, 213, 244, 274),
+                       labels = c('May-01', 'Jun-01',
+                                  'Jul-01', 'Aug-01',
+                                  'Sep-01', 'Oct-01')) +
+    scale_y_continuous(sec.axis = sec_axis(~.,
+                                           breaks = c(minWL, minWL + 10),
+                                           name = 'Hourly Precip. (cm)\n',
+                                           labels = c('0', '2'))) +
+    scale_color_manual(values = c("black" = "black", "darkgray" = "darkgray"),
+                       labels = c("Great Meadow WL", "Gilmore Meadow WL"),
+                       guide = "legend")
+
+
   ggsave(paste0("outputs/hydrographs/", str_replace_all(sitename, "\\s", "_"),
-                "_", year, ".png"), width = 8, height = 6)
-    
+              "_", year, ".png"), width = 8, height = 6.7)
 }
+
 
 
 ## Loop through to make each hydrograph
